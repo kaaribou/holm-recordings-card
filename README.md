@@ -12,13 +12,18 @@ HOLM Recordings Card lit la **source multimédia Reolink** de Home Assistant (NV
 
 ### En bref
 
-- 📹 **Caméras et jours** en pastilles : Aujourd'hui, Hier, Lun. 28…
+- 📹 **Caméras et jours** en pastilles : Aujourd'hui, Hier, Lun. 28… Les listes défilent à la molette, en glissant à la souris ou au doigt, et avec les flèches ‹ › qui apparaissent aux bords.
+- 📅 **Calendrier** : choisissez directement une date ; seuls les jours qui ont des enregistrements sont proposés.
 - 🕒 **Frise 24 h** : les plages enregistrées, le curseur de lecture, l'heure au survol ; un toucher lit l'instant choisi.
-- 🚶 **Détections** : personnes, véhicules, animaux, mouvements (vos `binary_sensor`) placés sur la frise en couleur et listés sous forme de raccourcis.
+- 🚶 **Détections** : personnes, véhicules, animaux, mouvements (vos `binary_sensor`) placés sur la frise en couleur et listés sous forme de raccourcis. **Filtre** Personne / Véhicule / Animal (avec le nombre de détections de chaque type).
 - ⏭️ **Lecture continue** : à la fin d'un fichier, le suivant démarre ; boutons clip précédent / suivant.
 - ⏩ Vitesse 1× · 2× · 4× · 8×, bascule **basse / haute définition** en gardant la position.
 
 ![Enregistrements](docs/images/enregistrements.png)
+
+| Calendrier et filtre des détections |
+|---|
+| ![Calendrier](docs/images/calendrier.png) |
 
 ---
 
@@ -104,4 +109,4 @@ La carte vous plaît ? Vous pouvez m'offrir une bière 🍺
 
 Code : licence **MIT** — © kaaribou. Voir le [CHANGELOG](CHANGELOG.md).
 
-Fait partie de la collection **HOLM** : [Carburant HOLM](https://github.com/kaaribou/carburant-holm) · [HOLM Navbar Card](https://github.com/kaaribou/holm-navbar-card) · [HOLM Music Card](https://github.com/kaaribou/holm-music-card) · [HOLM Sentinel Card](https://github.com/kaaribou/holm-sentinel-card).
+Fait partie de la collection **HOLM** : [Volets HOLM](https://github.com/kaaribou/volets-holm) · [Climat HOLM](https://github.com/kaaribou/climat-holm) · [Carburant HOLM](https://github.com/kaaribou/carburant-holm) · [HOLM Climate Card](https://github.com/kaaribou/climate-card-holm) · [HOLM Security Card](https://github.com/kaaribou/holm-security-card) · [HOLM Covers Card](https://github.com/kaaribou/holm-covers-card) · [HOLM Navbar Card](https://github.com/kaaribou/holm-navbar-card) · [HOLM Music Card](https://github.com/kaaribou/holm-music-card) · [HOLM Sentinel Card](https://github.com/kaaribou/holm-sentinel-card) · [HOLM Power Flow Card](https://github.com/kaaribou/holm-power-flow-card) · [HOLM Energy Cards](https://github.com/kaaribou/holm-energy-cards) · [HOLM Radiator Card](https://github.com/kaaribou/holm-radiator-card) · [HOLM Floor Card](https://github.com/kaaribou/holm-floor-card) · [HOLM Smoke Card](https://github.com/kaaribou/holm-smoke-card) · [HOLM BG Card](https://github.com/kaaribou/holm-bg-card).

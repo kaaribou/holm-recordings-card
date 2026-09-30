@@ -1,4 +1,4 @@
-/* holm-recordings-card — https://github.com/kaaribou/holm-recordings-card — licence MIT — v1.0.0 */
+/* holm-recordings-card — https://github.com/kaaribou/holm-recordings-card — licence MIT — v1.1.0 */
 // holm-recordings-card — enregistrements Reolink (NVR / caméras) : caméra, jour, frise 24 h avec les détections, lecture continue
 // Lit la source multimédia « reolink » de Home Assistant (aucune configuration nécessaire).
 // type: custom:holm-recordings-card
@@ -17,7 +17,7 @@ const hms = (t) => new Date(t).toLocaleTimeString("fr-FR", { hour: "2-digit", mi
 class HolmRecordingsCard extends HTMLElement {
   setConfig(c) {
     this._c = { title: "Enregistrements", resolution: "sub", ...c };
-    this._res = this._c.resolution; this._speed = 1;
+    this._res = this._c.resolution; this._speed = 1; this._off = new Set(); // types de détection masqués
     if (this._hass && this.shadowRoot) { this._skeleton(); this._init(); }
   }
   set hass(h) {
@@ -110,7 +110,8 @@ class HolmRecordingsCard extends HTMLElement {
     const box = this.$("cams");
     if (this._err) { box.innerHTML = `<div class="err">${this._err}</div>`; return; }
     box.innerHTML = (this._cams || []).map((c, i) => `<button class="chip ${c === this._cam ? "on" : ""}" data-i="${i}"><ha-icon icon="mdi:cctv"></ha-icon>${c.name}</button>`).join("");
-    box.querySelectorAll("button").forEach((b) => b.onclick = async () => { this._cam = this._cams[+b.dataset.i]; this._cur = null; this._renderCams(); this._resetPlayer(); await this._loadDays(); });
+    box.querySelectorAll("button").forEach((b) => b.onclick = async () => { this._cam = this._cams[+b.dataset.i]; this._cur = null; this._toggleCal(false); this._renderCams(); this._resetPlayer(); await this._loadDays(); });
+    this._reveal(box); this._edges(box);
     const st = this._hass.states[(this._cam?.thumb || "").split("/").pop()];
     if (st && !this._cur) this.$("vid").poster = st.attributes.entity_picture || "";
   }
@@ -122,27 +123,102 @@ class HolmRecordingsCard extends HTMLElement {
       const l = diff === 0 ? "Aujourd'hui" : diff === 1 ? "Hier" : t.toLocaleDateString("fr-FR", { weekday: "short", day: "numeric" });
       return `<button class="day ${d === this._day ? "on" : ""}" data-i="${i}">${l}</button>`;
     }).join("");
-    this.$("days").querySelectorAll("button").forEach((b) => b.onclick = () => { this._day = this._days[+b.dataset.i]; this._cur = null; this._resetPlayer(); this._renderDays(); this._loadFiles(); });
+    this.$("days").querySelectorAll("button").forEach((b) => b.onclick = () => this._pickDay(this._days[+b.dataset.i]));
+    this._reveal(this.$("days"));
+    this._edges(this.$("days"));
   }
+  _pickDay(d) {
+    if (!d) return;
+    this._day = d; this._cur = null; this._resetPlayer(); this._renderDays(); this._loadFiles();
+  }
+  // ----- calendrier : ne propose que les jours qui ont des enregistrements
+  _toggleCal(force) {
+    const box = this.$("calp"), open = force ?? box.hidden;
+    box.hidden = !open;
+    this.$("cal").classList.toggle("on", open);
+    if (open) { const d = this._day || this._days?.[0]; this._calM = d ? [d.y, d.m] : [new Date().getFullYear(), new Date().getMonth() + 1]; this._renderCal(); }
+  }
+  _renderCal() {
+    const [y, m] = this._calM, box = this.$("calp");
+    const has = new Map((this._days || []).map((d) => [`${d.y}-${d.m}-${d.d}`, d]));
+    const months = [...new Set((this._days || []).map((d) => d.y * 12 + d.m - 1))].sort((a, b) => a - b);
+    const cur = y * 12 + m - 1, minM = months[0] ?? cur, maxM = months[months.length - 1] ?? cur;
+    const first = new Date(y, m - 1, 1), lead = (first.getDay() + 6) % 7, n = new Date(y, m, 0).getDate();
+    const today = new Date(); const tk = `${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`;
+    let cells = "";
+    for (let i = 0; i < lead; i++) cells += `<span></span>`;
+    for (let d = 1; d <= n; d++) {
+      const k = `${y}-${m}-${d}`, ok = has.has(k), sel = this._day && `${this._day.y}-${this._day.m}-${this._day.d}` === k;
+      cells += `<button class="cd ${ok ? "ok" : ""} ${sel ? "on" : ""} ${k === tk ? "td" : ""}" ${ok ? `data-k="${k}"` : "disabled"}>${d}</button>`;
+    }
+    box.innerHTML = `<div class="ch"><button class="ib" data-m="-1" ${cur <= minM ? "disabled" : ""}><ha-icon icon="mdi:chevron-left"></ha-icon></button>
+      <b>${first.toLocaleDateString("fr-FR", { month: "long", year: "numeric" })}</b>
+      <button class="ib" data-m="1" ${cur >= maxM ? "disabled" : ""}><ha-icon icon="mdi:chevron-right"></ha-icon></button></div>
+      <div class="cg">${["L", "M", "M", "J", "V", "S", "D"].map((x) => `<em>${x}</em>`).join("")}${cells}</div>
+      <div class="cf">${(this._days || []).length} jours enregistrés</div>`;
+    box.querySelectorAll("[data-m]").forEach((b) => b.onclick = (ev) => { ev.stopPropagation(); const t = cur + +b.dataset.m; this._calM = [Math.floor(t / 12), (t % 12) + 1]; this._renderCal(); });
+    box.querySelectorAll("[data-k]").forEach((b) => b.onclick = () => { this._toggleCal(false); this._pickDay(has.get(b.dataset.k)); });
+  }
+  // ----- défilement horizontal : molette, glisser à la souris, flèches aux bords
+  _scrollable(row) {
+    if (row._sc) return; row._sc = true;
+    row.addEventListener("wheel", (ev) => {
+      if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY) || row.scrollWidth <= row.clientWidth) return;
+      const before = row.scrollLeft; row.scrollLeft += ev.deltaY;
+      if (row.scrollLeft !== before) ev.preventDefault();
+    }, { passive: false });
+    let x0 = null, l0 = 0, moved = false;
+    row.addEventListener("pointerdown", (ev) => { if (ev.pointerType !== "mouse" || ev.button) return; x0 = ev.clientX; l0 = row.scrollLeft; moved = false; });
+    row.addEventListener("pointermove", (ev) => {
+      if (x0 === null) return; const dx = ev.clientX - x0;
+      if (Math.abs(dx) > 4) { moved = true; row.classList.add("drag"); row.scrollLeft = l0 - dx; }
+    });
+    const end = () => { x0 = null; setTimeout(() => row.classList.remove("drag"), 0); };
+    row.addEventListener("pointerup", end); row.addEventListener("pointerleave", end);
+    row.addEventListener("click", (ev) => { if (moved) { ev.stopPropagation(); ev.preventDefault(); moved = false; } }, true);
+    row.addEventListener("scroll", () => this._edges(row), { passive: true });
+    const w = row.parentElement;
+    w.querySelector(".sa.l")?.addEventListener("click", () => row.scrollBy({ left: -row.clientWidth * 0.8, behavior: "smooth" }));
+    w.querySelector(".sa.r")?.addEventListener("click", () => row.scrollBy({ left: row.clientWidth * 0.8, behavior: "smooth" }));
+    if (window.ResizeObserver) { (this._ro ||= new ResizeObserver((es) => es.forEach((e) => this._edges(e.target)))).observe(row); }
+  }
+  _edges(row) {
+    if (!row) return; this._scrollable(row);
+    const w = row.parentElement, max = row.scrollWidth - row.clientWidth - 1;
+    w.classList.toggle("cl", row.scrollLeft > 1); w.classList.toggle("cr", row.scrollLeft < max);
+  }
+  _reveal(row) { const el = row?.querySelector(".on"); if (el) requestAnimationFrame(() => { const r = row.getBoundingClientRect(), e = el.getBoundingClientRect(); if (e.left < r.left || e.right > r.right) row.scrollLeft += e.left - r.left - (r.width - e.width) / 2; this._edges(row); }); }
   _renderTimeline() {
     const pct = (t) => (((t - this._d0) / 86400000) * 100).toFixed(3);
     const segs = this._files.map((f, i) => `<i class="sg" data-i="${i}" style="left:${pct(f.s)}%;width:${(((f.e - f.s) / 86400000) * 100).toFixed(3)}%"></i>`).join("");
-    const ev = this._events.map((e) => { const [n, col] = KIND(e.id); return `<b class="ev" data-t="${e.t}" title="${n} · ${hms(e.t)}" style="left:${pct(e.t)}%;background:${col}"></b>`; }).join("");
+    const allKinds = [...new Map(this._events.map((e) => KIND(e.id))).entries()];
+    const shown = this._events.filter((e) => !this._off.has(KIND(e.id)[0]));
+    const ev = shown.map((e) => { const [n, col] = KIND(e.id); return `<b class="ev" data-t="${e.t}" title="${n} · ${hms(e.t)}" style="left:${pct(e.t)}%;background:${col}"></b>`; }).join("");
     const hrs = [0, 3, 6, 9, 12, 15, 18, 21].map((h) => `<em style="left:${(h / 24) * 100}%">${h}h</em>`).join("");
-    const kinds = [...new Map(this._events.map((e) => KIND(e.id))).entries()];
-    const list = this._events.slice(-40).reverse();
+    const count = (n) => this._events.filter((e) => KIND(e.id)[0] === n).length;
+    const list = shown.slice(-200).reverse();
     this.$("tl").innerHTML = `
       <div class="bar" id="bar"><div class="evs">${ev}</div><div class="rec">${segs}</div><div class="ph" id="ph" hidden></div><div class="hv" id="hv" hidden></div></div>
       <div class="ax">${hrs}</div>
-      <div class="lg"><span><i class="lr"></i>Enregistré (${this._files.length} fichiers)</span>${kinds.map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("")}</div>
-      ${list.length ? `<div class="evl">${list.map((e) => { const [n, c] = KIND(e.id); return `<button class="ei" data-t="${e.t}" style="--c:${c}"><i></i>${hms(e.t).slice(0, 5)}<small>${n}</small></button>`; }).join("")}</div>`
-        : this._cam.events.length ? `<div class="nd">Aucune détection ce jour-là</div>` : ""}`;
+      <div class="lg"><span><i class="lr"></i>Enregistré (${this._files.length} fichiers)</span>
+        ${allKinds.length > 1 ? `<span class="fl">Afficher :</span><button class="fk ${this._off.size ? "" : "on"}" data-k="*">Tout</button>` : ""}
+        ${allKinds.map(([n, c]) => `<button class="fk ${this._off.has(n) ? "" : "on"}" data-k="${n}" style="--c:${c}" title="Afficher / masquer : ${n}"><i></i>${n}<small>${count(n)}</small></button>`).join("")}</div>
+      ${list.length ? `<div class="scw"><button class="sa l" aria-label="Précédents"><ha-icon icon="mdi:chevron-left"></ha-icon></button><div class="evl row" id="evl">${list.map((e) => { const [n, c] = KIND(e.id); return `<button class="ei" data-t="${e.t}" style="--c:${c}"><i></i>${hms(e.t).slice(0, 5)}<small>${n}</small></button>`; }).join("")}</div><button class="sa r" aria-label="Suivants"><ha-icon icon="mdi:chevron-right"></ha-icon></button></div>`
+        : this._cam.events.length ? `<div class="nd">${this._events.length ? "Aucune détection pour ce filtre" : "Aucune détection ce jour-là"}</div>` : ""}`;
     const bar = this.$("bar"), hv = this.$("hv");
     const tAt = (ev) => { const r = bar.getBoundingClientRect(); return this._d0 + Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * 86400000; };
     bar.onpointermove = (ev) => { const t = tAt(ev); hv.hidden = false; hv.style.left = `${pct(t)}%`; hv.textContent = hms(t).slice(0, 5); };
     bar.onpointerleave = () => (hv.hidden = true);
     bar.onclick = (ev) => { const t = ev.target.dataset?.t ? +ev.target.dataset.t : tAt(ev); this._at(t); };
     this.shadowRoot.querySelectorAll(".ei").forEach((b) => b.onclick = () => this._at(+b.dataset.t));
+    this.shadowRoot.querySelectorAll(".fk").forEach((b) => b.onclick = () => {
+      const k = b.dataset.k;
+      if (k === "*") this._off.clear();
+      else if (this._off.has(k)) this._off.delete(k);
+      else { this._off.add(k); if (allKinds.every(([n]) => this._off.has(n))) this._off.clear(); }
+      this._renderTimeline();
+    });
+    if (this.$("evl")) this._edges(this.$("evl"));
     this._updateNow();
   }
   _skeleton() {
@@ -156,8 +232,37 @@ class HolmRecordingsCard extends HTMLElement {
       .seg { display:flex; background:color-mix(in srgb, var(--primary-text-color) 6%, transparent); border-radius:10px; padding:2px; }
       .seg button { border:none; background:none; color:var(--secondary-text-color); font:inherit; font-size:12px; padding:4px 10px; border-radius:8px; cursor:pointer; }
       .seg button.on { background:color-mix(in srgb, var(--primary-color, #0abfbf) 25%, transparent); color:var(--primary-text-color); font-weight:600; }
-      .row { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; padding-bottom:2px; margin-bottom:8px; }
+      .row { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; padding-bottom:2px; scroll-behavior:smooth; user-select:none; -webkit-user-select:none; }
+      .row.drag { scroll-behavior:auto; cursor:grabbing; } .row.drag * { pointer-events:none; }
       .row::-webkit-scrollbar { display:none; }
+      .scw { position:relative; min-width:0; flex:1; margin-bottom:8px; }
+      .scw .row { --fl:0px; --fr:0px; -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%); mask-image:linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%); }
+      .scw.cl .row { --fl:40px; } .scw.cr .row { --fr:40px; }
+      .sa { position:absolute; top:50%; transform:translateY(calc(-50% - 1px)); z-index:2; width:26px; height:26px; border-radius:50%; border:none; cursor:pointer; display:none; align-items:center; justify-content:center; padding:0;
+            background:color-mix(in srgb, var(--primary-text-color) 16%, var(--ha-card-background, var(--card-background-color, #1c1c1c))); color:var(--primary-text-color); box-shadow:0 2px 6px rgba(0,0,0,.35); }
+      .sa ha-icon { --mdc-icon-size:18px; } .sa.l { left:0; } .sa.r { right:0; }
+      .scw.cl .sa.l, .scw.cr .sa.r { display:flex; }
+      .dr { position:relative; display:flex; align-items:flex-start; gap:6px; }
+      .ib.cal { flex:none; height:28px; width:32px; border-radius:999px; } .ib.cal.on { background:color-mix(in srgb, var(--primary-color, #0abfbf) 30%, transparent); }
+      .calp { position:absolute; z-index:5; top:34px; left:0; width:264px; padding:10px; border-radius:14px; box-sizing:border-box;
+              background:var(--ha-card-background, var(--card-background-color, #1c2430)); box-shadow:0 12px 32px rgba(0,0,0,.45), 0 0 0 1px var(--divider-color, rgba(255,255,255,.1)); }
+      .calp[hidden] { display:none; }
+      .ch { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; } .ch b { font-size:13px; text-transform:capitalize; color:var(--primary-text-color); }
+      .ch .ib:disabled { opacity:.3; cursor:default; }
+      .cg { display:grid; grid-template-columns:repeat(7, 1fr); gap:3px; text-align:center; }
+      .cg em { font-style:normal; font-size:10px; color:var(--secondary-text-color); padding:2px 0; }
+      .cd { font:inherit; font-size:12px; height:30px; border-radius:8px; border:none; background:none; color:var(--secondary-text-color); opacity:.35; padding:0; }
+      .cd.ok { opacity:1; cursor:pointer; color:var(--primary-text-color); background:color-mix(in srgb, var(--primary-color, #0abfbf) 12%, transparent); }
+      .cd.ok:hover { background:color-mix(in srgb, var(--primary-color, #0abfbf) 28%, transparent); }
+      .cd.td { box-shadow:inset 0 0 0 1px var(--primary-color, #0abfbf); }
+      .cd.on { background:var(--primary-color, #0abfbf); color:#fff; font-weight:700; }
+      .cf { font-size:11px; color:var(--secondary-text-color); text-align:center; margin-top:6px; }
+      .fl { margin-left:6px; }
+      .fk { font:inherit; font-size:11px; cursor:pointer; display:flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px; background:none; color:var(--secondary-text-color);
+            border:1px solid color-mix(in srgb, var(--primary-text-color) 14%, transparent); opacity:.55; }
+      .fk i { width:8px; height:8px; border-radius:50%; background:var(--c, var(--primary-color, #0abfbf)); display:inline-block; }
+      .fk small { font-size:10px; opacity:.8; }
+      .fk.on { opacity:1; color:var(--primary-text-color); border-color:color-mix(in srgb, var(--c, var(--primary-color, #0abfbf)) 60%, transparent); background:color-mix(in srgb, var(--c, var(--primary-color, #0abfbf)) 14%, transparent); }
       .chip, .day { flex:none; font:inherit; font-size:12.5px; cursor:pointer; border-radius:999px; padding:5px 12px; display:flex; align-items:center; gap:5px; white-space:nowrap;
             border:1px solid color-mix(in srgb, var(--primary-text-color) 12%, transparent); background:none; color:var(--secondary-text-color); }
       .chip ha-icon { --mdc-icon-size:15px; }
@@ -186,8 +291,7 @@ class HolmRecordingsCard extends HTMLElement {
       .lg { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--secondary-text-color); margin-top:4px; }
       .lg span { display:flex; align-items:center; gap:4px; } .lg i { width:9px; height:9px; border-radius:3px; display:inline-block; }
       .lg i.lr { background:color-mix(in srgb, var(--primary-color, #0abfbf) 45%, transparent); }
-      .evl { display:flex; gap:5px; overflow-x:auto; scrollbar-width:none; margin-top:10px; }
-      .evl::-webkit-scrollbar { display:none; }
+      .evl { gap:5px; margin-top:10px; }
       .ei { flex:none; font:inherit; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:5px; padding:4px 9px; border-radius:10px; border:none;
             color:var(--primary-text-color); background:color-mix(in srgb, var(--c) 14%, transparent); }
       .ei i { width:7px; height:7px; border-radius:50%; background:var(--c); } .ei small { font-weight:400; color:var(--secondary-text-color); }
@@ -197,8 +301,10 @@ class HolmRecordingsCard extends HTMLElement {
     <ha-card>
       <div class="hd"><div class="tt">${c.title || ""}</div>
         <div class="seg">${[["sub", "Basse déf."], ["main", "Haute déf."]].map(([k, l]) => `<button data-r="${k}" class="${this._res === k ? "on" : ""}">${l}</button>`).join("")}</div></div>
-      <div class="row" id="cams"></div>
-      <div class="row" id="days"></div>
+      <div class="scw"><button class="sa l" aria-label="Précédentes"><ha-icon icon="mdi:chevron-left"></ha-icon></button><div class="row" id="cams"></div><button class="sa r" aria-label="Suivantes"><ha-icon icon="mdi:chevron-right"></ha-icon></button></div>
+      <div class="dr"><button class="ib cal" id="cal" title="Choisir une date"><ha-icon icon="mdi:calendar-month-outline"></ha-icon></button>
+        <div class="scw"><button class="sa l" aria-label="Jours plus récents"><ha-icon icon="mdi:chevron-left"></ha-icon></button><div class="row" id="days"></div><button class="sa r" aria-label="Jours plus anciens"><ha-icon icon="mdi:chevron-right"></ha-icon></button></div>
+        <div class="calp" id="calp" hidden></div></div>
       <div class="pl"><video id="vid" controls playsinline muted preload="metadata"></video><div class="ov" id="ov" hidden></div></div>
       <div class="ctl"><button class="ib" id="prev" title="Clip précédent"><ha-icon icon="mdi:skip-previous"></ha-icon></button>
         <div class="now" id="now"></div>
@@ -209,6 +315,9 @@ class HolmRecordingsCard extends HTMLElement {
     const v = this.$("vid");
     v.addEventListener("timeupdate", () => this._updateNow());
     v.addEventListener("ended", () => this._step(1)); // lecture continue
+    this.$("cal").onclick = (ev) => { ev.stopPropagation(); this._toggleCal(); };
+    this.$("calp").onclick = (ev) => ev.stopPropagation();
+    this.shadowRoot.addEventListener("click", () => { if (!this.$("calp").hidden) this._toggleCal(false); });
     this.$("prev").onclick = () => this._step(-1);
     this.$("next").onclick = () => this._step(1);
     this.$("spd").onclick = () => { const s = [1, 2, 4, 8]; this._speed = s[(s.indexOf(this._speed) + 1) % s.length]; v.playbackRate = this._speed; this.$("spd").textContent = this._speed + "×"; };
@@ -262,4 +371,4 @@ window.customCards = window.customCards || [];
 window.customCards.push({ type: "holm-recordings-card", name: "HOLM – Enregistrements caméras", description: "Enregistrements Reolink : caméra, jour, frise 24 h avec les détections et lecture continue", preview: false });
 })();
 
-console.info("%c HOLM-RECORDINGS %c 1.0.0 ", "background:#0abfbf;color:#111;border-radius:3px 0 0 3px", "background:#123;color:#fff;border-radius:0 3px 3px 0");
+console.info("%c HOLM-RECORDINGS %c 1.1.0 ", "background:#0abfbf;color:#111;border-radius:3px 0 0 3px", "background:#123;color:#fff;border-radius:0 3px 3px 0");
